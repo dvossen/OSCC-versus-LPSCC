@@ -1,0 +1,53 @@
+#!/bin/bash
+
+AnnovarAnnotationFunction(){
+	Convert2Annovar=/home/.../annovar/convert2annovar.pl
+	TableAnnovar=/home/...annovar/table_annovar.pl
+	Annovar_Database_Dir=/home/.../annovar/humandb/
+	
+	FilteredVCF=$1
+	
+	temp_annovar_input_file=${FilteredVCF}.annovar.input
+	temp_annovar_output_file=${temp_annovar_input_file%.annovar.input}.annovar.annotated
+	
+	perl $Convert2Annovar -format vcf4 $FilteredVCF -includeinfo  > $temp_annovar_input_file
+	perl $TableAnnovar \
+		$temp_annovar_input_file \
+		$Annovar_Database_Dir \
+		-buildver hg19 \
+		-out $temp_annovar_output_file \
+		-remove -protocol refGene,cytoBand,esp6500siv2_all,snp142,esp6500siv2_ea,1000g2015aug_all,1000g2015aug_eur,exac03,exac03nontcga,exac03nonpsych,kaviar_20150923,cosmic70,ljb26_all,clinvar_20160302 -operation g,r,f,f,f,f,f,f,f,f,f,f,f,f \
+		-nastring NA -csvout -otherinfo
+}
+
+VarScanProtocolFunction () {
+	BAM=$1
+	echo $BAM
+	
+	temp_sample_id=${BAM##*/}
+	temp_sample_id=${temp_sample_id%.bam}
+	
+	OUTPUT_DIR=/home/.../
+	temp_snp_file=$OUTPUT_DIR$temp_sample_id.varScan.snp
+	temp_indel_file=$OUTPUT_DIR$temp_sample_id.varScan.indel
+	
+	
+	RefFasta=/home/.../Homo_sapiens.GRCh37.55.dna.chromosome.all2.fa
+	BedFile=/home/.../fanc-baits-flat-ex100_5Pileup.bed
+	VarScan=/home/.../VarScan.v2.3.9.jar
+	
+	# VarScan SNVs
+	nice -10 samtools mpileup -f $RefFasta -l $BedFile $BAM -q 28 -d 8000 | java -jar $VarScan mpileup2snp --min-coverage 10 --min-reads2 4 --min-var-freq 0.1 --strand-filter 1 --p-value 0.05 --output-vcf 1 > $temp_snp_file
+	
+	# VarScan indels
+	nice -10 samtools mpileup -f $RefFasta -l $BedFile $BAM -q 28 -d 8000 | java -jar $VarScan mpileup2indel --min-coverage 10 --min-reads2 4 --min-var-freq 0.1 --strand-filter 1 --p-value 0.1 --output-vcf 1 > $temp_indel_file
+	
+	java -jar $VarScan filter $temp_snp_file --indel-file $temp_indel_file --min-coverage 10 --min-reads2 4 --min-var-freq 0.1 --strand-filter 1 --p-value 0.05 > ${temp_snp_file}.filter
+	java -jar $VarScan filter $temp_indel_file --min-reads2 10 --min-var-freq 0.1 --p-value 0.05 > ${temp_indel_file}.filter
+	
+	AnnovarAnnotationFunction ${temp_snp_file}.filter
+	AnnovarAnnotationFunction ${temp_indel_file}.filter
+}
+export -f VarScanProtocolFunction AnnovarAnnotationFunction
+INPUT_DIR=/home/.../
+nice -19 parallel -j 10 --progress VarScanProtocolFunction ::: $INPUT_DIR/*.bam
